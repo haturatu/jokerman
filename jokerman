@@ -5,7 +5,11 @@
 # Copyright Interop Tokyo ShowNet NOC team
 #
 # upa@haeena.net
-
+# -*-----------------*-
+# This is a fork of github.com/upa/deadman
+# 
+# taro@eyes4you.org
+# -*-----------------*-
 
 import re
 import os
@@ -19,12 +23,15 @@ import signal
 import argparse
 import asyncio
 import concurrent.futures
+import requests
+from urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 from subprocess import DEVNULL, PIPE, getoutput, getstatusoutput
 import _thread
 from shutil import which
 
 
-TITLE_PROGNAME = "Dead Man"
+TITLE_PROGNAME = "Joker Man"
 TITLE_VERSION = "[ver 22.02.10]"
 TITLE_VERTIC_LENGTH = 4
 
@@ -92,8 +99,8 @@ class PingResult:
 
 class PingTarget:
 
-    def __init__(self, name, address, osname, relay = None, source = None,
-                 tcp = None):
+    def __init__(self, name, address, osname, relay=None, source=None,
+                 tcp=None, https=None):
 
         self.name = name
         self.addr = address
@@ -108,8 +115,13 @@ class PingTarget:
         self.snt = 0 # number of sent ping
         self.ttl = 0 # last ttl
         self.result = []
-        self.ping = Ping(self.addr, osname, relay = relay, source = source,
-                         tcp = tcp)
+
+        if https:
+            self.ping = HttpPing(self.addr, https)
+        elif tcp:
+            self.ping = Ping(self.addr, osname, relay=relay, source=source, tcp=tcp)
+        else:
+            self.ping = Ping(self.addr, osname, relay=relay, source=source)
 
         return
 
@@ -166,6 +178,10 @@ class PingTarget:
         if res.errcode == PING_FAILED:
             # ping timeout
             return "X"
+        
+        if not res.success:
+            # HTTP/S failed
+            return "X"
 
         if res.rtt < RTT_SCALE * 1: return "▁"
         if res.rtt < RTT_SCALE * 2: return "▂"
@@ -195,6 +211,60 @@ class Separator:
     pass
 
 SEPARATOR = Separator()
+
+class HttpPing:
+    def __init__(self, addr, https_options):
+        self.addr = addr
+        self.options = https_options
+        self.timeout = float(https_options.get('timeout', 5.0))
+        self.verify = https_options.get('verify', 'true').lower() == 'true'
+        self.method = https_options.get('method', 'GET').upper()
+        self.expected_status = int(https_options.get('expected_status', 200))
+        self.url = https_options.get('url', f"https://{self.addr}")
+        
+    async def async_send(self):
+        try:
+            start_time = time.time()
+            
+            if self.method == 'GET':
+                resp = requests.get(self.url, 
+                                  timeout=self.timeout, 
+                                  verify=self.verify)
+            elif self.method == 'HEAD':
+                resp = requests.head(self.url, 
+                                   timeout=self.timeout, 
+                                   verify=self.verify)
+            else:
+                return PingResult(success=False, errcode=PING_FAILED)
+                
+            rtt = (time.time() - start_time) * 1000  # Convert to milliseconds
+            
+            # Check if status code matches expected status
+            if resp.status_code == self.expected_status:
+                return PingResult(
+                    success=True,
+                    errcode=PING_SUCCESS,
+                    rtt=rtt,
+                    ttl=-1  # Not applicable for HTTP
+                )
+            else:
+                return PingResult(
+                    success=False,
+                    errcode=PING_FAILED,
+                    rtt=rtt,
+                    ttl=-1
+                )
+                
+        except requests.exceptions.SSLError:
+            return PingResult(success=False, errcode=PING_FAILED)
+        except requests.exceptions.ConnectTimeout:
+            return PingResult(success=False, errcode=PING_SSH_TIMEOUT)
+        except requests.exceptions.ConnectionError:
+            return PingResult(success=False, errcode=PING_SSH_FAILED)
+        except requests.exceptions.RequestException:
+            return PingResult(success=False, errcode=PING_FAILED)
+        except Exception:
+            return PingResult(success=False, errcode=PING_FAILED)
 
 class Ping:
 
@@ -716,14 +786,14 @@ class Deadman:
         newtargets = []
         self.targetlist = self.gettargetlist(self.configfile)
 
-        for name, addr, relay, source, tcp in self.targetlist:
+        for name, addr, relay, source, tcp, https in self.targetlist:
             osname = relay.get('os', OSNAME)
 
             if re.fullmatch(r'-+', name):
                 pt = SEPARATOR
             else:
                 pt = PingTarget(name, addr, osname,
-                                relay = relay, source = source, tcp = tcp)
+                                relay = relay, source = source, tcp = tcp, https = https)
             idx = -1
             if pt in self.targets:
                 idx = self.targets.index(pt)
@@ -865,9 +935,18 @@ class Deadman:
             addr = ss.pop(0) if ss else None
             source = None
             tcp = None
+            https = None
             relay = {}
+
             for s in ss:
-                key, value = s.split("=")
+                if '=' not in s:
+                    continue
+                
+                parts = s.split('=', 1) 
+                if len(parts) != 2:
+                    continue
+                
+                key, value = parts
                 if key in ("os", "relay", "via", "community",
                            "netns", "user", "key", "method",
                            "username", "password", "verify"):
@@ -876,14 +955,20 @@ class Deadman:
                     source = value
                 elif key == "tcp":
                     tcp = value
-
-            targetlist.append([name, addr, relay, source, tcp])
-
+                elif key == "https":
+                    # HTTPS Options (key=value,key2=value2)
+                    https = {}
+                    for opt in value.split(','):
+                        if '=' in opt:
+                            k, v = opt.split('=', 1) 
+                            https[k] = v
+                        else:
+                            https[opt] = True
+                        
+            targetlist.append([name, addr, relay, source, tcp, https])
+        
         configfile.close()
-
         return targetlist
-
-
 
 # mics
 def whichipversion(addr):

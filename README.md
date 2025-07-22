@@ -1,14 +1,9 @@
-deadman
+jokerman
 =======
 
-deadman is an observation software for host status using ping.
+jokerman is an observation software for host status using ping & HTTP.
 
-deadman does not have rich functionalities. It only checks host
-statuses using ICMP echo. We recomend using deadman for building
-temporary networks such as conference and event networks. This
-software was originally designed and implemented for Interop Tokyo
-ShowNet.
-
+deadman does not have rich functionalities. It only checks host statuses using ICMP echo. We recommend using deadman for building temporary networks such as conference and event networks. This software was originally designed and implemented for Interop Tokyo ShowNet. This software is a fork of deadman, extended and renamed as jokerman. It adds support for HTTP connectivity checks in addition to the original ICMP echo functionality.
 
 ![demo](https://github.com/upa/deadman/raw/master/img/deadman-demo.gif)
 
@@ -18,8 +13,8 @@ How to use
 Clone this repository and then run.
 
 	$ git clone https://github.com/upa/deadman
-	$ cd deadman
-	$ ./deadman deadman.conf
+	$ cd jokerman
+	$ ./jokerman jokerman.conf
 
 
 To change the targets, modify or create a config file.
@@ -30,6 +25,18 @@ To change the targets, modify or create a config file.
 	---
 	kame            203.178.141.194
 	kame6           2001:200:dff:fff1:216:3eff:feb1:44d7
+        ---
+        # If the SSL certificate has expired
+        failssl expired.badssl.com https=true
+
+        website1 example.com https=true
+
+        # This endpoint destination is 404
+        website2 example.com https=url=https://example.com/api,timeout=3,verify=false,expected_status=200
+
+        # MyWebsite :)
+        website3 soulminingrig.com https=true
+
 
 `deadman` with `-a` or `--async-mode` option sends ping to targets
 asynchronously.
@@ -64,4 +71,5 @@ MIT
 Contact
 =======
 
-upa@haeena.net
+deadman: upa@haeena.net
+jokerman: taro@eyes4you.org
