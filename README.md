@@ -12,7 +12,7 @@ How to use
 
 Clone this repository and then run.
 
-	$ git clone https://github.com/upa/deadman
+	$ git clone https://github.com/haturatu/jokerman.git
 	$ cd jokerman
 	$ ./jokerman jokerman.conf
 
