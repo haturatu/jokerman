@@ -25,17 +25,17 @@ To change the targets, modify or create a config file.
 	---
 	kame            203.178.141.194
 	kame6           2001:200:dff:fff1:216:3eff:feb1:44d7
-        ---
-        # If the SSL certificate has expired
-        failssl expired.badssl.com https=true
+	---
+	# If the SSL certificate has expired
+	failssl expired.badssl.com https=true
 
-        website1 example.com https=true
+	website1 example.com https=true
 
-        # This endpoint destination is 404
-        website2 example.com https=url=https://example.com/api,timeout=3,verify=false,expected_status=200
+	# This endpoint destination is 404
+	website2 example.com https=url=https://example.com/api,timeout=3,verify=false,expected_status=200
 
-        # MyWebsite :)
-        website3 soulminingrig.com https=true
+	# MyWebsite :)
+	website3 soulminingrig.com https=true
 
 
 `deadman` with `-a` or `--async-mode` option sends ping to targets
