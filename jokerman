@@ -89,11 +89,13 @@ BLINK_ARROW = False
 class PingResult:
 
     def __init__(self, success = False, errcode = PING_FAILED,
-                 rtt = 0.0, ttl = 0):
+                 rtt = 0.0, ttl = 0, variation = 0.0):
         self.success = success
         self.errcode = errcode
         self.rtt = rtt
         self.ttl = ttl
+        # Variation (%) from previous successful RTT. Used for HTTP/S result bars.
+        self.variation = variation
         return
     
 
@@ -115,6 +117,7 @@ class PingTarget:
         self.snt = 0 # number of sent ping
         self.ttl = 0 # last ttl
         self.result = []
+        self.last_success_rtt = None
 
         if https:
             self.ping = HttpPing(self.addr, https)
@@ -123,7 +126,16 @@ class PingTarget:
         else:
             self.ping = Ping(self.addr, osname, relay=relay, source=source)
 
+        self.probe_type = self.get_probe_type()
+
         return
+
+    def get_probe_type(self):
+        if isinstance(self.ping, HttpPing):
+            return self.ping.get_protocol_label()
+        if self.ping.tcp:
+            return "TCP"
+        return "ICMP"
 
     def __str__(self):
         s = [self.name, self.addr]
@@ -145,6 +157,14 @@ class PingTarget:
         self.consume_ping_result(res)
 
     def consume_ping_result(self, res):
+        if res.success and isinstance(self.ping, HttpPing):
+            if self.last_success_rtt and self.last_success_rtt > 0:
+                diff = abs(res.rtt - self.last_success_rtt)
+                res.variation = (diff / self.last_success_rtt) * 100.0
+            else:
+                res.variation = 0.0
+            self.last_success_rtt = res.rtt
+
         if res.success:
             # Ping Success
             self.state = True
@@ -183,13 +203,18 @@ class PingTarget:
             # HTTP/S failed
             return "X"
 
-        if res.rtt < RTT_SCALE * 1: return "▁"
-        if res.rtt < RTT_SCALE * 2: return "▂"
-        if res.rtt < RTT_SCALE * 3: return "▃"
-        if res.rtt < RTT_SCALE * 4: return "▄"
-        if res.rtt < RTT_SCALE * 5: return "▅"
-        if res.rtt < RTT_SCALE * 6: return "▆"
-        if res.rtt < RTT_SCALE * 7: return "▇"
+        metric = res.rtt
+        # For HTTP/S checks, show response-time fluctuation rate in Result bars.
+        if isinstance(self.ping, HttpPing):
+            metric = res.variation
+
+        if metric < RTT_SCALE * 1: return "▁"
+        if metric < RTT_SCALE * 2: return "▂"
+        if metric < RTT_SCALE * 3: return "▃"
+        if metric < RTT_SCALE * 4: return "▄"
+        if metric < RTT_SCALE * 5: return "▅"
+        if metric < RTT_SCALE * 6: return "▆"
+        if metric < RTT_SCALE * 7: return "▇"
 
         return "█"
 
@@ -204,6 +229,7 @@ class PingTarget:
         self.snt = 0
         self.ttl = 0
         self.result = []
+        self.last_success_rtt = None
 
         return
 
@@ -221,6 +247,14 @@ class HttpPing:
         self.method = https_options.get('method', 'GET').upper()
         self.expected_status = int(https_options.get('expected_status', 200))
         self.url = https_options.get('url', f"https://{self.addr}")
+
+    def get_protocol_label(self):
+        lower_url = self.url.lower()
+        if lower_url.startswith("https://"):
+            return "HTTPS"
+        if lower_url.startswith("http://"):
+            return "HTTP"
+        return "HTTP/S"
         
     async def async_send(self):
         try:
@@ -590,9 +624,30 @@ class CursesCtrl():
         self.start_address = self.start_hostname + self.length_hostname + 1
         self.length_address = alen
 
+        # update protocol/type
+        plen = len("PROTO")
+        for target in targets:
+            if target == SEPARATOR:
+                continue
+            if plen < len(target.probe_type):
+                plen = len(target.probe_type)
+        self.start_proto = self.start_address + self.length_address + 1
+        self.length_proto = plen
+
+        # Detect target types to choose accurate UI labels.
+        self.has_http_target = False
+        self.has_non_http_target = False
+        for target in targets:
+            if target == SEPARATOR:
+                continue
+            if isinstance(target.ping, HttpPing):
+                self.has_http_target = True
+            else:
+                self.has_non_http_target = True
+
         # update reference
-        self.ref_start = self.start_address + self.length_address + 1
-        self.ref_length = len(" LOSS  RTT  AVG  SNT")
+        self.ref_start = self.start_proto + self.length_proto + 1
+        self.ref_length = len(" " + self.get_value_header())
 
         # update result
         self.res_start = self.ref_start + self.ref_length + 2
@@ -609,6 +664,13 @@ class CursesCtrl():
         RESULT_STR_LENGTH = self.res_length
 
         return
+
+    def get_value_header(self):
+        if self.has_http_target and not self.has_non_http_target:
+            return "LOSS  LAT  AVG  SNT"
+        if self.has_http_target and self.has_non_http_target:
+            return "LOSS RTT/LAT AVG  SNT"
+        return "LOSS  RTT  AVG  SNT"
 
     def reinit(self):
         curses.endwin()
@@ -643,8 +705,15 @@ class CursesCtrl():
 
         spacelen = self.x - (len(ARROW) + len(TITLE_VERSION))
         self.waddstr(1, spacelen, TITLE_VERSION, curses.A_BOLD)
+        if self.has_http_target and not self.has_non_http_target:
+            scale_label = "LAT"
+        elif self.has_http_target and self.has_non_http_target:
+            scale_label = "RTT/LAT"
+        else:
+            scale_label = "RTT"
+
         self.waddstr(2, len(ARROW),
-                     "RTT Scale %dms. Keys: (r)efresh" % RTT_SCALE)
+                     "%s Scale %dms. Keys: (r)efresh" % (scale_label, RTT_SCALE))
         self.stdscr.move(0, 0)
         self.stdscr.refresh()
         return
@@ -661,13 +730,16 @@ class CursesCtrl():
     def print_reference(self):
         hostname_str = "HOSTNAME"
         address_str = "ADDRESS"
-        values_str = " LOSS  RTT  AVG  SNT  RESULT"
+        proto_str = "PROTO"
+        values_str = " " + self.get_value_header() + "  RESULT"
 
         # Print reference hostname and address
         self.waddstr(TITLE_VERTIC_LENGTH, len(ARROW),
                      hostname_str, curses.A_BOLD)
         self.waddstr(TITLE_VERTIC_LENGTH, self.start_address,
                      address_str, curses.A_BOLD)
+        self.waddstr(TITLE_VERTIC_LENGTH, self.start_proto,
+                     proto_str[0:self.length_proto], curses.A_BOLD)
 
         # Print references of values
         self.waddstr(TITLE_VERTIC_LENGTH, self.ref_start,
@@ -707,6 +779,8 @@ class CursesCtrl():
                      target.name[0:self.length_hostname], line_color)
         self.waddstr(linenum, self.start_address,
                      target.addr[0:self.length_address], line_color)
+        self.waddstr(linenum, self.start_proto,
+                     target.probe_type[0:self.length_proto], line_color)
 
         self.waddstr(linenum, self.ref_start, values_str, line_color)
 
